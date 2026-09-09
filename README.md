@@ -45,6 +45,21 @@ Instagram web UI (signed-in browser / Grok Bot)
 
 > No `IG_ACCESS_TOKEN` / Meta app secrets are required for the browser-ingest path.
 
+## Post images
+
+If a tag is ingested **without** `media_url`, the server tries Instagram’s public media redirect:
+
+`https://www.instagram.com/p/{code}/media/?size=l`
+
+then caches the JPEG under `/data/media` and sets `media_url` to `/media/...`.
+
+Backfill existing rows:
+
+```bash
+curl -X POST https://igtracker.apps.vexitey.com/api/ingest/backfill-media \
+  -H "Authorization: Bearer $INGEST_API_KEY"
+```
+
 ## Ingest webhook (browser agent)
 
 All write routes require:

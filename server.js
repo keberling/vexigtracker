@@ -24,7 +24,9 @@ import {
   readStore,
   upsertFollowers,
   upsertTags,
+  writeStore,
 } from "./lib/store.js";
+import { downloadToMedia, ensureCachedMedia } from "./lib/media.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -101,6 +103,26 @@ app.get("/api/stream", (req, res) => {
 
 app.use("/media", express.static(mediaDir, { maxAge: "7d" }));
 
+
+async function enrichTagsWithMedia(tags, req) {
+  const base = APP_URL || `${req.protocol}://${req.get("host")}`;
+  const out = [];
+  for (const tag of tags || []) {
+    const copy = { ...tag };
+    if (!copy.media_url && copy.permalink) {
+      copy.media_url = await ensureCachedMedia(copy, { baseUrl: base });
+    } else if (copy.media_url && !String(copy.media_url).includes("/media/")) {
+      try {
+        copy.media_url = await downloadToMedia(copy.media_url, { baseUrl: base });
+      } catch (err) {
+        console.warn("cache remote media_url failed:", err.message);
+      }
+    }
+    out.push(copy);
+  }
+  return out;
+}
+
 function requireIngest(req, res, next) {
   if (!INGEST_API_KEY) {
     return res.status(503).json({ error: "INGEST_API_KEY not configured on server" });
@@ -126,7 +148,7 @@ function requireIngest(req, res, next) {
  *   replace_followers?: boolean  // if true, still upsert (not wipe) — reserved
  * }
  */
-app.post("/api/ingest", requireIngest, (req, res) => {
+app.post("/api/ingest", requireIngest, async (req, res) => {
   try {
     const body = req.body || {};
     const out = {};
@@ -134,7 +156,8 @@ app.post("/api/ingest", requireIngest, (req, res) => {
       out.followers = upsertFollowers(body.followers, body.source || "browser");
     }
     if (Array.isArray(body.tags) && body.tags.length) {
-      out.tags = upsertTags(body.tags, body.source || "browser");
+      const tags = await enrichTagsWithMedia(body.tags, req);
+      out.tags = upsertTags(tags, body.source || "browser");
     }
     if (body.snapshot && body.snapshot.follower_count != null) {
       out.snapshot = addSnapshot(body.snapshot);
@@ -165,6 +188,8 @@ app.post("/api/ingest/tags", requireIngest, upload.single("media"), (req, res) =
     const base = APP_URL || `${req.protocol}://${req.get("host")}`;
     const url = `${base.replace(/\/$/, "")}/media/${req.file.filename}`;
     tags = tags.map((t, i) => (i === 0 ? { ...t, media_url: url } : t));
+  } else {
+    tags = await enrichTagsWithMedia(tags, req);
   }
   const result = upsertTags(tags, req.body?.source || "browser");
   const entries = listEntries({ limit: 5 });
@@ -180,6 +205,32 @@ app.post("/api/ingest/snapshot", requireIngest, (req, res) => {
   const snap = addSnapshot(req.body);
   broadcast("stats", publicStats());
   res.status(201).json({ ok: true, snapshot: snap, stats: publicStats() });
+});
+
+
+app.post("/api/ingest/backfill-media", requireIngest, async (req, res) => {
+  try {
+    const store = readStore();
+    const base = APP_URL || `${req.protocol}://${req.get("host")}`;
+    let updated = 0;
+    let failed = 0;
+    for (const tag of store.tags) {
+      if (tag.media_url) continue;
+      const media_url = await ensureCachedMedia(tag, { baseUrl: base });
+      if (media_url) {
+        tag.media_url = media_url;
+        tag.updated_at = new Date().toISOString();
+        updated += 1;
+      } else {
+        failed += 1;
+      }
+    }
+    writeStore(store);
+    broadcast("stats", publicStats());
+    res.json({ ok: true, updated, failed, stats: publicStats() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "backfill_failed" });
+  }
 });
 
 app.post("/api/login", (req, res) => {
