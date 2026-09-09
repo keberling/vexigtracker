@@ -20,10 +20,11 @@ Instagram web UI (signed-in browser / Grok Bot)
 | Rule | Detail |
 |------|--------|
 | Account | `@vexitey` |
-| Entry | Currently **follows** @vexitey **and** **photo-tags** @vexitey |
+| Entry | Currently **follows** @vexitey **and** (**photo-tags** @vexitey **or** **@mentions** @vexitey in caption/comment) |
 | Follow timing | Follow may **predate** the window |
-| Drawing window | Tag date **2026-09-13 … 2026-09-15** (`America/Chicago`) |
-| Eligible | `follows && tagged && in_window` (computed on ingest) |
+| Drawing window | Tag/mention date **2026-09-13 … 2026-09-15** (`America/Chicago`) |
+| Eligible | `follows && tagged && in_window` (computed on ingest; `tagged` covers photo-tag or mention) |
+| Sources | Ingest `source`: `photo_tag` or `mention` (also `browser` / `browser-test`) |
 
 ## Coolify
 
