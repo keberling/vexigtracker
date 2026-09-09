@@ -1,0 +1,22 @@
+services:
+  vexigtracker:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATA_DIR: /data
+      APP_URL: ${APP_URL:-}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      IG_APP_ID: ${IG_APP_ID:-}
+      IG_APP_SECRET: ${IG_APP_SECRET:-}
+      IG_REDIRECT_URI: ${IG_REDIRECT_URI:-}
+      IG_API_VERSION: ${IG_API_VERSION:-v21.0}
+    volumes:
+      - vexigtracker-data:/data
+    restart: unless-stopped
+
+volumes:
+  vexigtracker-data:

@@ -1,0 +1,24 @@
+{
+  "relationships_followers": [
+    {
+      "title": "maya.prints",
+      "string_list_data": [
+        {
+          "href": "https://www.instagram.com/maya.prints",
+          "value": "maya.prints",
+          "timestamp": 1786492800
+        }
+      ]
+    },
+    {
+      "title": "kai_rides",
+      "string_list_data": [
+        {
+          "href": "https://www.instagram.com/kai_rides",
+          "value": "kai_rides",
+          "timestamp": 1787616000
+        }
+      ]
+    }
+  ]
+}

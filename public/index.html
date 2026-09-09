@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tagwatch — follower tags</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Outfit:wght@380;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="gate" class="gate hidden">
+      <form id="login-form" class="gate-card">
+        <p class="kicker">Internal</p>
+        <h1>Tagwatch</h1>
+        <p>This dashboard is password-gated.</p>
+        <input type="password" id="password" placeholder="Password" autocomplete="current-password" />
+        <button type="submit">Open</button>
+        <p id="login-error" class="error"></p>
+      </form>
+    </div>
+
+    <div id="app" class="app hidden">
+      <aside class="rail">
+        <div class="brand">
+          <span class="mark">Tw</span>
+          <div>
+            <strong>Tagwatch</strong>
+            <em>Internal only</em>
+          </div>
+        </div>
+
+        <section class="card account">
+          <p class="kicker" id="mode-label">Demo data</p>
+          <h2 id="account-name">Your Shop</h2>
+          <p class="muted" id="account-handle">@yourshop</p>
+          <dl>
+            <div><dt>Followers imported</dt><dd id="stat-followers">0</dd></div>
+            <div><dt>Tagged posts synced</dt><dd id="stat-tags">0</dd></div>
+          </dl>
+        </section>
+
+        <section class="card">
+          <label>
+            New followers since
+            <input type="date" id="since-date" />
+          </label>
+          <label class="check">
+            <input type="checkbox" id="unknown-dates" />
+            Include followers with no follow date
+          </label>
+          <button type="button" id="save-settings" class="ghost">Apply date</button>
+        </section>
+
+        <section class="card actions">
+          <button type="button" id="sync-tags">Sync tagged posts</button>
+          <label class="file">
+            Upload follower export
+            <input type="file" id="follower-file" accept=".zip,.json,.html,.htm,.csv" />
+          </label>
+          <button type="button" id="load-demo" class="ghost">Load demo data</button>
+          <a id="oauth-link" class="ghost link" href="/auth/instagram">Connect with Instagram</a>
+        </section>
+
+        <section class="card">
+          <details>
+            <summary>Paste access token</summary>
+            <p class="hint">From Meta App Dashboard → Instagram → Generate token. Token stays on this machine.</p>
+            <input type="password" id="access-token" placeholder="IGQ… or EAA…" autocomplete="off" />
+            <button type="button" id="save-token">Connect token</button>
+            <button type="button" id="disconnect" class="ghost">Disconnect</button>
+          </details>
+        </section>
+
+        <section class="card">
+          <details>
+            <summary>Add one follower</summary>
+            <input type="text" id="manual-user" placeholder="username" />
+            <input type="date" id="manual-date" />
+            <button type="button" id="add-follower" class="ghost">Add</button>
+          </details>
+        </section>
+
+        <p class="fine" id="sync-meta"></p>
+      </aside>
+
+      <main>
+        <header class="top">
+          <div>
+            <p class="kicker">Follow + tag match</p>
+            <h1>Who followed, and who tagged you</h1>
+          </div>
+          <p class="banner" id="api-note">
+            Instagram’s official API does not return a follower list. Tags come from Graph API
+            <code>/{ig-user-id}/tags</code>. Follow dates come from an Instagram data export.
+          </p>
+        </header>
+
+        <section class="kpis" id="kpis">
+          <article><span>New followers</span><strong id="kpi-total">0</strong></article>
+          <article><span>Tagged you</span><strong id="kpi-tagged">0</strong></article>
+          <article><span>No tag yet</span><strong id="kpi-untagged">0</strong></article>
+          <article><span>Tag rate</span><strong id="kpi-rate">0%</strong></article>
+        </section>
+
+        <section class="toolbar">
+          <div class="pills" role="tablist">
+            <button type="button" data-filter="all" class="on">All</button>
+            <button type="button" data-filter="tagged">Tagged</button>
+            <button type="button" data-filter="untagged">Not tagged</button>
+          </div>
+          <input type="search" id="search" placeholder="Search username" />
+        </section>
+
+        <p id="flash" class="flash hidden"></p>
+
+        <section class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Follower</th>
+                <th>Followed</th>
+                <th>Tagged us?</th>
+                <th>Post link</th>
+              </tr>
+            </thead>
+            <tbody id="rows">
+              <tr><td colspan="4" class="empty">Loading…</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
