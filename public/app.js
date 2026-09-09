@@ -24,7 +24,8 @@ function flash(message, isError = false) {
   const el = $("flash");
   el.textContent = message;
   el.classList.toggle("hidden", !message);
-  el.style.borderColor = isError ? "#e4572e" : "#d9a441";
+  el.classList.toggle("bad", Boolean(isError));
+  el.classList.toggle("ok", Boolean(message) && !isError);
 }
 
 function fmtDate(value) {
@@ -40,16 +41,47 @@ function renderStatus(status) {
   const demo = status.settings.demoMode || status.account?.loginType === "demo";
   $("mode-label").textContent = demo ? "Demo data" : status.connected ? "Connected" : "Not connected";
   $("account-name").textContent = status.account?.name || "No account";
-  $("account-handle").textContent = status.account ? `@${status.account.username}` : "Connect Instagram or load demo";
+  $("account-handle").textContent = status.account
+    ? `@${status.account.username}${status.graphHost ? ` · ${status.graphHost}` : ""}`
+    : "Paste a token to connect";
+  $("stat-ig-followers").textContent =
+    status.instagramFollowersCount == null ? "—" : Number(status.instagramFollowersCount).toLocaleString();
   $("stat-followers").textContent = status.followerCount;
   $("stat-tags").textContent = status.tagCount;
   $("since-date").value = status.settings.sinceDate;
   $("unknown-dates").checked = Boolean(status.settings.includeUnknownDates);
   $("oauth-link").classList.toggle("hidden", !status.oauthReady);
   const bits = [];
-  if (status.lastFollowerImportAt) bits.push(`Followers imported ${fmtDate(status.lastFollowerImportAt)}`);
-  if (status.lastTagSyncAt) bits.push(`Tags synced ${fmtDate(status.lastTagSyncAt)}`);
+  if (status.lastFollowerImportAt) bits.push(`Export imported ${fmtDate(status.lastFollowerImportAt)}`);
+  if (status.lastTagSyncAt) bits.push(`Tags ${status.lastTagSyncOk === false ? "failed" : "synced"} ${fmtDate(status.lastTagSyncAt)}`);
   $("sync-meta").textContent = bits.join(" · ");
+  renderSteps(status.steps || []);
+  renderDiagnose(status.lastDiagnose || []);
+}
+
+function renderSteps(steps) {
+  $("steps").innerHTML = steps
+    .map((step) => {
+      const mark = step.state === "done" ? "✓" : step.state === "fail" ? "!" : "•";
+      return `<article class="step ${step.state}">
+        <span class="dot">${mark}</span>
+        <div><h3>${escapeHtml(step.title)}</h3><p>${escapeHtml(step.body)}</p></div>
+      </article>`;
+    })
+    .join("");
+}
+
+function renderDiagnose(tests) {
+  if (!tests.length) {
+    $("diagnose").innerHTML = "";
+    return;
+  }
+  $("diagnose").innerHTML = tests
+    .map(
+      (t) =>
+        `<div><span class="${t.ok ? "ok" : "bad"}">${t.ok ? "OK" : "FAIL"}</span><span>${escapeHtml(t.name)} — ${escapeHtml(t.detail)}</span></div>`,
+    )
+    .join("");
 }
 
 function renderResults(results) {
@@ -59,9 +91,11 @@ function renderResults(results) {
   $("kpi-rate").textContent = `${Math.round(results.tagRate * 100)}%`;
   const body = $("rows");
   if (!results.rows.length) {
-    body.innerHTML = `<tr><td colspan="4" class="empty">No followers in this date range. Upload an Instagram follower export, or load demo data.</td></tr>`;
-    return;
-  }
+    const why = results.allTags?.length
+      ? `Tagged posts are in the table below, but this follower table is empty because no follower export has been imported. Instagram’s API cannot provide names.`
+      : `No follower names in this date range. Connecting a token does not import followers — upload an Instagram “Followers and following” JSON export.`;
+    body.innerHTML = `<tr><td colspan="4" class="empty">${why}</td></tr>`;
+  } else {
   body.innerHTML = results.rows
     .map((row) => {
       const posts = row.posts.length
@@ -82,6 +116,30 @@ function renderResults(results) {
       </tr>`;
     })
     .join("");
+  }
+
+  const tagBody = $("tag-rows");
+  const tags = results.allTags || [];
+  $("tags-hint").textContent = tags.length
+    ? `${tags.length} photo-tags from Instagram /tags. These show even without a follower export.`
+    : "These are photo-tags from /tags, even if you have not imported followers yet.";
+  if (!tags.length) {
+    tagBody.innerHTML = `<tr><td colspan="3" class="empty">No tagged posts synced yet. Connect a token (sync runs automatically) or click Sync tagged posts.</td></tr>`;
+  } else {
+    tagBody.innerHTML = tags
+      .map(
+        (p) => `<tr>
+          <td class="user"><a href="https://www.instagram.com/${escapeHtml(p.username)}/" target="_blank" rel="noreferrer">@${escapeHtml(p.username)}</a></td>
+          <td>${fmtDate(p.timestamp)}</td>
+          <td class="posts">${
+            p.permalink
+              ? `<a href="${p.permalink}" target="_blank" rel="noreferrer">${p.permalink}</a><span class="caption">${escapeHtml([p.mediaType, p.caption].filter(Boolean).join(" · "))}</span>`
+              : "No permalink"
+          }</td>
+        </tr>`,
+      )
+      .join("");
+  }
 }
 
 function escapeHtml(value) {
@@ -139,8 +197,9 @@ $("sync-tags").addEventListener("click", async () => {
     flash("Syncing tagged posts from Instagram…");
     const data = await api("/api/sync/tags", { method: "POST", body: "{}" });
     await refresh();
-    flash(`Synced ${data.tagCount} tagged posts.`);
+    flash(data.message || (data.ok ? `Synced ${data.tagCount} tagged posts.` : "Tagged-post sync failed."), !data.ok);
   } catch (err) {
+    await refresh().catch(() => {});
     flash(err.message, true);
   }
 });
@@ -171,13 +230,20 @@ $("load-demo").addEventListener("click", async () => {
 
 $("save-token").addEventListener("click", async () => {
   try {
-    await api("/api/connect/token", {
+    flash("Connecting token and syncing tagged posts…");
+    const data = await api("/api/connect/token", {
       method: "POST",
       body: JSON.stringify({ accessToken: $("access-token").value }),
     });
     $("access-token").value = "";
     await refresh();
-    flash("Instagram account connected. Click Sync tagged posts.");
+    const count = data.instagramFollowersCount;
+    const countBit = count == null ? "" : ` Instagram reports ${Number(count).toLocaleString()} followers (names are not included).`;
+    const sync = data.tagSync || {};
+    const syncBit = sync.ok
+      ? ` Synced ${sync.tagCount} tagged posts.`
+      : ` Tagged-post sync: ${sync.message || "failed"}.`;
+    flash(`Connected @${data.username}.${countBit}${syncBit}`, !sync.ok);
   } catch (err) {
     flash(err.message, true);
   }
@@ -220,6 +286,14 @@ $("search").addEventListener("input", (e) => {
   searchTimer = setTimeout(() => refresh().catch((err) => flash(err.message, true)), 180);
 });
 
-refresh().catch((err) => {
-  if (err.message !== "Password required.") flash(err.message, true);
-});
+refresh()
+  .then(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("connected") === "1") {
+      flash("Instagram connected. Check the status cards — tagged posts sync automatically; follower names still need an export.");
+      window.history.replaceState({}, "", "/");
+    }
+  })
+  .catch((err) => {
+    if (err.message !== "Password required.") flash(err.message, true);
+  });

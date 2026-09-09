@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Outfit:wght@380;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=3" />
   </head>
   <body>
     <div id="gate" class="gate hidden">
@@ -35,12 +35,13 @@
         </div>
 
         <section class="card account">
-          <p class="kicker" id="mode-label">Demo data</p>
-          <h2 id="account-name">Your Shop</h2>
-          <p class="muted" id="account-handle">@yourshop</p>
+          <p class="kicker" id="mode-label">Not connected</p>
+          <h2 id="account-name">No account</h2>
+          <p class="muted" id="account-handle">Paste a token to connect</p>
           <dl>
-            <div><dt>Followers imported</dt><dd id="stat-followers">0</dd></div>
-            <div><dt>Tagged posts synced</dt><dd id="stat-tags">0</dd></div>
+            <div><dt>Instagram follower count</dt><dd id="stat-ig-followers">—</dd></div>
+            <div><dt>Names imported from export</dt><dd id="stat-followers">0</dd></div>
+            <div><dt>Tagged posts from API</dt><dd id="stat-tags">0</dd></div>
           </dl>
         </section>
 
@@ -95,10 +96,13 @@
             <h1>Who followed, and who tagged you</h1>
           </div>
           <p class="banner" id="api-note">
-            Instagram’s official API does not return a follower list. Tags come from Graph API
-            <code>/{ig-user-id}/tags</code>. Follow dates come from an Instagram data export.
+            A connected token can sync <strong>photo-tags</strong>. It cannot import follower names.
+            That list has to come from an Instagram data export.
           </p>
         </header>
+
+        <section class="steps" id="steps"></section>
+        <section class="diagnose" id="diagnose"></section>
 
         <section class="kpis" id="kpis">
           <article><span>New followers</span><strong id="kpi-total">0</strong></article>
@@ -133,8 +137,25 @@
             </tbody>
           </table>
         </section>
+
+        <section class="table-wrap tags-panel">
+          <h2>Tagged posts from Instagram</h2>
+          <p class="hint" id="tags-hint">These are photo-tags from <code>/tags</code>, even if you have not imported followers yet.</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Who tagged you</th>
+                <th>When</th>
+                <th>Post link</th>
+              </tr>
+            </thead>
+            <tbody id="tag-rows">
+              <tr><td colspan="3" class="empty">No tagged posts synced yet.</td></tr>
+            </tbody>
+          </table>
+        </section>
       </main>
     </div>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=3"></script>
   </body>
 </html>

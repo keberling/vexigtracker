@@ -4,14 +4,14 @@ import express from "express";
 import multer from "multer";
 import { APP_PASSWORD, HOST, PORT, isProd, oauthConfigured } from "./lib/config.js";
 import { loadDemo } from "./lib/demo.js";
-import { authorizeUrl, detectAndConnect, exchangeCodeForToken, fetchAllTags, InstagramApiError } from "./lib/instagram.js";
+import { authorizeUrl, detectAndConnect, exchangeCodeForToken, formatIgError, InstagramApiError, runDiagnostics } from "./lib/instagram.js";
 import { parseFollowerUpload } from "./lib/parseExport.js";
 import { buildResults } from "./lib/results.js";
 import {
   publicStatus,
   readSecrets,
   readStore,
-  replaceTags,
+  recordTagSync,
   updateStore,
   upsertFollowers,
   writeSecrets,
@@ -91,10 +91,8 @@ app.post("/api/connect/token", async (req, res) => {
   try {
     const accessToken = String(req.body?.accessToken || "").trim();
     if (!accessToken) return res.status(400).json({ error: "Paste an Instagram or Facebook access token." });
-    const connected = await detectAndConnect(accessToken);
-    writeSecrets({ accessToken: connected.accessToken, graphHost: connected.graphHost });
-    updateStore({ account: connected.account, settings: { demoMode: false } });
-    res.json({ ok: true, status: publicStatus() });
+    const result = await connectAndSync(accessToken);
+    res.json({ ok: true, ...result, status: publicStatus() });
   } catch (err) {
     sendError(res, err);
   }
@@ -121,9 +119,7 @@ app.get("/auth/callback", async (req, res) => {
       return res.status(400).send("Invalid OAuth callback.");
     }
     const token = await exchangeCodeForToken(String(code));
-    const connected = await detectAndConnect(token);
-    writeSecrets({ accessToken: connected.accessToken, graphHost: connected.graphHost });
-    updateStore({ account: connected.account, settings: { demoMode: false } });
+    await connectAndSync(token);
     res.redirect("/?connected=1");
   } catch (err) {
     res.status(400).send(err.message || "OAuth failed.");
@@ -132,18 +128,8 @@ app.get("/auth/callback", async (req, res) => {
 
 app.post("/api/sync/tags", async (_req, res) => {
   try {
-    const secrets = readSecrets();
-    const store = readStore();
-    if (!secrets.accessToken || !store.account?.id || store.settings.demoMode) {
-      return res.status(400).json({ error: "Connect an Instagram professional account first." });
-    }
-    const tags = await fetchAllTags({
-      graphHost: secrets.graphHost,
-      accessToken: secrets.accessToken,
-      userId: store.account.id,
-    });
-    replaceTags(tags);
-    res.json({ ok: true, tagCount: tags.length, status: publicStatus() });
+    const result = await syncTagsFromStore();
+    res.json({ ok: result.ok, tagCount: result.tagCount, message: result.message, status: publicStatus() });
   } catch (err) {
     sendError(res, err);
   }
@@ -208,9 +194,65 @@ function parseCookies(header = "") {
   return out;
 }
 
+async function connectAndSync(accessToken) {
+  const connected = await detectAndConnect(accessToken);
+  writeSecrets({ accessToken: connected.accessToken, graphHost: connected.graphHost });
+  updateStore({ account: connected.account, settings: { demoMode: false } });
+  let sync;
+  try {
+    sync = await syncTagsFromStore();
+  } catch (err) {
+    sync = { ok: false, tagCount: 0, message: formatIgError(err) };
+  }
+  return {
+    username: connected.account.username,
+    instagramFollowersCount: connected.account.followersCount,
+    tagSync: sync,
+  };
+}
+
+async function syncTagsFromStore() {
+  const secrets = readSecrets();
+  const store = readStore();
+  if (!secrets.accessToken || !store.account?.id || store.settings.demoMode) {
+    throw new InstagramApiError("Connect an Instagram professional account first.", 400);
+  }
+  const altIds = [store.account.appScopedId].filter(Boolean);
+  try {
+    const diag = await runDiagnostics({
+      graphHost: secrets.graphHost,
+      accessToken: secrets.accessToken,
+      userId: store.account.id,
+      altIds,
+    });
+    const tagTest = diag.tests.find((t) => t.name === "Tagged posts");
+    const ok = Boolean(tagTest?.ok);
+    recordTagSync({
+      ok,
+      tags: ok ? diag.tags : undefined,
+      error: ok ? null : tagTest?.detail || "Tagged-post sync failed.",
+      diagnose: diag.tests,
+    });
+    return {
+      ok,
+      tagCount: ok ? diag.tags.length : store.tags.length,
+      message: tagTest?.detail,
+      tests: diag.tests,
+    };
+  } catch (err) {
+    const message = formatIgError(err);
+    recordTagSync({ ok: false, error: message });
+    throw err;
+  }
+}
+
 function sendError(res, err) {
-  const status = err instanceof InstagramApiError ? err.status || 400 : 400;
-  res.status(status).json({ error: err.message || "Request failed." });
+  const payload = {
+    error: err instanceof InstagramApiError ? formatIgError(err) : err.message || "Request failed.",
+    code: err.code,
+  };
+  const status = err instanceof InstagramApiError ? 400 : 400;
+  res.status(status).json(payload);
 }
 
 if (!isProd && !readStore().followers.length && !readStore().tags.length) {
