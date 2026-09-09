@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Outfit:wght@380;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/styles.css?v=4" />
+    <link rel="stylesheet" href="/styles.css?v=5" />
   </head>
   <body>
     <div id="gate" class="gate hidden">
@@ -96,8 +96,9 @@
             <h1>Who followed, and who tagged you</h1>
           </div>
           <p class="banner" id="api-note">
-            A connected token can sync <strong>photo-tags</strong>. It cannot import follower names.
-            That list has to come from an Instagram data export.
+            <code>/tags</code> only returns <strong>person-tags on the photo</strong>, not
+            <strong>@yourname in a caption</strong>. Caption mentions need the Instagram
+            <code>mentions</code> webhook. Private posts never appear. Follower names still need an export.
           </p>
         </header>
 
@@ -145,17 +146,18 @@
             <thead>
               <tr>
                 <th>Who tagged you</th>
+                <th>Type</th>
                 <th>When</th>
                 <th>Post link</th>
               </tr>
             </thead>
             <tbody id="tag-rows">
-              <tr><td colspan="3" class="empty">No tagged posts synced yet.</td></tr>
+              <tr><td colspan="4" class="empty">No tagged posts synced yet.</td></tr>
             </tbody>
           </table>
         </section>
       </main>
     </div>
-    <script src="/app.js?v=4"></script>
+    <script src="/app.js?v=5"></script>
   </body>
 </html>

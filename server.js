@@ -2,9 +2,26 @@ import "dotenv/config";
 import crypto from "node:crypto";
 import express from "express";
 import multer from "multer";
-import { APP_PASSWORD, HOST, IG_ACCESS_TOKEN, PORT, isProd, oauthConfigured } from "./lib/config.js";
+import {
+  APP_PASSWORD,
+  HOST,
+  IG_ACCESS_TOKEN,
+  IG_APP_SECRET,
+  PORT,
+  WEBHOOK_VERIFY_TOKEN,
+  isProd,
+  oauthConfigured,
+} from "./lib/config.js";
 import { loadDemo } from "./lib/demo.js";
-import { authorizeUrl, detectAndConnect, exchangeCodeForToken, formatIgError, InstagramApiError, runDiagnostics } from "./lib/instagram.js";
+import {
+  detectAndConnect,
+  exchangeCodeForToken,
+  fetchMentionedMedia,
+  formatIgError,
+  InstagramApiError,
+  runDiagnostics,
+  authorizeUrl,
+} from "./lib/instagram.js";
 import { parseFollowerUpload } from "./lib/parseExport.js";
 import { buildResults } from "./lib/results.js";
 import {
@@ -14,6 +31,7 @@ import {
   recordTagSync,
   updateStore,
   upsertFollowers,
+  upsertTag,
   writeSecrets,
 } from "./lib/store.js";
 
@@ -27,7 +45,12 @@ const upload = multer({
 const oauthStates = new Map();
 const sessions = new Map();
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({
+  limit: "2mb",
+  verify: (req, _res, buf) => {
+    req.rawBody = buf;
+  },
+}));
 app.use(express.urlencoded({ extended: false }));
 app.use((req, res, next) => {
   const cookie = parseCookies(req.headers.cookie);
@@ -37,6 +60,29 @@ app.use((req, res, next) => {
 });
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
+
+app.get("/webhooks/instagram", (req, res) => {
+  const mode = String(req.query["hub.mode"] || "");
+  const token = String(req.query["hub.verify_token"] || "");
+  const challenge = String(req.query["hub.challenge"] || "");
+  if (mode === "subscribe" && token && token === WEBHOOK_VERIFY_TOKEN && challenge) {
+    return res.status(200).send(challenge);
+  }
+  res.status(403).send("Webhook verification failed.");
+});
+
+app.post("/webhooks/instagram", async (req, res) => {
+  res.status(200).send("EVENT_RECEIVED");
+  try {
+    if (!verifyWebhookSignature(req)) {
+      console.error("Instagram webhook signature mismatch");
+      return;
+    }
+    await handleInstagramWebhook(req.body);
+  } catch (err) {
+    console.error("Instagram webhook handler failed:", err.message);
+  }
+});
 
 app.post("/api/login", (req, res) => {
   if (!APP_PASSWORD) return res.json({ ok: true });
@@ -230,7 +276,7 @@ async function syncTagsFromStore() {
       userId: store.account.id,
       altIds,
     });
-    const tagTest = diag.tests.find((t) => t.name === "Tagged posts");
+    const tagTest = diag.tests.find((t) => t.name.startsWith("Photo-tags"));
     const ok = Boolean(tagTest?.ok);
     recordTagSync({
       ok,
@@ -248,6 +294,38 @@ async function syncTagsFromStore() {
     const message = formatIgError(err);
     recordTagSync({ ok: false, error: message });
     throw err;
+  }
+}
+
+function verifyWebhookSignature(req) {
+  if (!IG_APP_SECRET) return true;
+  const header = String(req.headers["x-hub-signature-256"] || "");
+  const expected = "sha256=" + crypto.createHmac("sha256", IG_APP_SECRET).update(req.rawBody || Buffer.from("")).digest("hex");
+  try {
+    return crypto.timingSafeEqual(Buffer.from(header), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
+async function handleInstagramWebhook(body) {
+  if (body?.object !== "instagram") return;
+  const secrets = readSecrets();
+  const store = readStore();
+  if (!secrets.accessToken || !store.account?.id) return;
+  for (const entry of body.entry || []) {
+    for (const change of entry.changes || []) {
+      if (change.field !== "mentions") continue;
+      const mediaId = change.value?.media_id;
+      if (!mediaId) continue;
+      const tag = await fetchMentionedMedia({
+        graphHost: secrets.graphHost,
+        accessToken: secrets.accessToken,
+        userId: store.account.id,
+        mediaId,
+      });
+      if (tag) upsertTag(tag);
+    }
   }
 }
 

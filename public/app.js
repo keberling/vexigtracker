@@ -129,12 +129,13 @@ function renderResults(results) {
     ? `${tags.length} photo-tags from Instagram /tags. These show even without a follower export.`
     : "These are photo-tags from /tags, even if you have not imported followers yet.";
   if (!tags.length) {
-    tagBody.innerHTML = `<tr><td colspan="3" class="empty">No tagged posts synced yet. Connect a token (sync runs automatically) or click Sync tagged posts.</td></tr>`;
+    tagBody.innerHTML = `<tr><td colspan="4" class="empty">No photo-tags from Instagram. If someone only wrote @yourname in a caption, that is a mention — enable the mentions webhook. Private accounts never show up here.</td></tr>`;
   } else {
     tagBody.innerHTML = tags
       .map(
         (p) => `<tr>
-          <td class="user"><a href="https://www.instagram.com/${escapeHtml(p.username)}/" target="_blank" rel="noreferrer">@${escapeHtml(p.username)}</a></td>
+          <td class="user"><a href="https://www.instagram.com/${escapeHtml(p.username)}/" target="_blank" rel="noreferrer">@${escapeHtml(p.username || "unknown")}</a></td>
+          <td>${escapeHtml(sourceLabel(p.source))}</td>
           <td>${fmtDate(p.timestamp)}</td>
           <td class="posts">${
             p.permalink
@@ -145,6 +146,12 @@ function renderResults(results) {
       )
       .join("");
   }
+}
+
+function sourceLabel(source) {
+  if (source === "mention") return "@mention in caption";
+  if (source === "collab") return "Collab post";
+  return "Photo person-tag";
 }
 
 function escapeHtml(value) {

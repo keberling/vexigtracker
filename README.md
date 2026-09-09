@@ -42,6 +42,7 @@ See the Coolify env/storage list in this repo’s deploy notes after push, or th
 | `IG_APP_ID` | Yes for live Instagram | from Meta app dashboard | |
 | `IG_APP_SECRET` | Yes for live Instagram | from Meta app dashboard | Treat as secret |
 | `IG_ACCESS_TOKEN` | **Yes** (recommended) | token from Meta → Generate token | Auto-connects on every start. You do not paste in the UI. |
+| `WEBHOOK_VERIFY_TOKEN` | For caption @mentions | any random string | Meta webhook verify token |
 | `IG_REDIRECT_URI` | If not using `APP_URL` | `https://igtracker.apps.vexitey.com/auth/callback` | Must match Meta exactly |
 | `HOST` | No | `0.0.0.0` | Already set in the image |
 | `PORT` | No | `3000` | Already set in the image |
@@ -64,3 +65,14 @@ Without this volume, a redeploy wipes the connected account and imported followe
 3. Generate a token and set it as `IG_ACCESS_TOKEN` in Coolify (preferred), or paste it in the dashboard
 
 Healthcheck path: `/api/health`
+
+### Caption @mentions (optional webhook)
+
+`GET /tags` does **not** include posts that only @mention you in the caption. To catch those going forward:
+
+1. Coolify env: `WEBHOOK_VERIFY_TOKEN` (any secret string)
+2. Meta → Instagram → Configure webhooks
+   - Callback URL: `https://<your-domain>/webhooks/instagram`
+   - Verify token: same as `WEBHOOK_VERIFY_TOKEN`
+   - Subscribe to **mentions**
+3. Redeploy. New caption @mentions will show as post links. Historical caption mentions cannot be backfilled.
