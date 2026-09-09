@@ -178,7 +178,8 @@ app.post("/api/ingest/followers", requireIngest, (req, res) => {
   res.json({ ok: true, ...result, stats: publicStats() });
 });
 
-app.post("/api/ingest/tags", requireIngest, upload.single("media"), (req, res) => {
+app.post("/api/ingest/tags", requireIngest, upload.single("media"), async (req, res) => {
+  try {
   let tags = Array.isArray(req.body?.tags) ? req.body.tags : null;
   if (!tags && req.body?.username && req.body?.permalink) {
     tags = [req.body];
@@ -196,6 +197,9 @@ app.post("/api/ingest/tags", requireIngest, upload.single("media"), (req, res) =
   broadcast("stats", publicStats());
   if (entries[0]) broadcast("entry.created", entries[0]);
   res.json({ ok: true, ...result, latest: entries[0] || null, stats: publicStats() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "ingest_tags_failed" });
+  }
 });
 
 app.post("/api/ingest/snapshot", requireIngest, (req, res) => {
