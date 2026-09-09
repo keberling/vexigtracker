@@ -1,98 +1,185 @@
 import "dotenv/config";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import express from "express";
 import multer from "multer";
 import {
   APP_PASSWORD,
+  APP_URL,
+  DATA_DIR,
   HOST,
-  IG_ACCESS_TOKEN,
-  IG_APP_SECRET,
-  META_APP_SECRET,
+  INGEST_API_KEY,
   PORT,
-  WEBHOOK_VERIFY_TOKEN,
+  WINDOW_END,
+  WINDOW_START,
   isProd,
-  oauthConfigured,
 } from "./lib/config.js";
-import { loadDemo } from "./lib/demo.js";
+import { addClient, broadcast, clientCount } from "./lib/sse.js";
 import {
-  detectAndConnect,
-  exchangeCodeForToken,
-  fetchMediaPreview,
-  fetchMentionedMedia,
-  lookupPublicPost,
-  formatIgError,
-  InstagramApiError,
-  runDiagnostics,
-  subscribeAccountWebhooks,
-  authorizeUrl,
-} from "./lib/instagram.js";
-import { parseFollowerUpload } from "./lib/parseExport.js";
-import { buildResults } from "./lib/results.js";
-import {
-  publicStatus,
-  readSecrets,
+  addSnapshot,
+  buildDashboard,
+  listEntries,
+  publicStats,
   readStore,
-  recordTagSync,
-  recordWebhook,
-  updateStore,
   upsertFollowers,
-  upsertTag,
-  writeSecrets,
+  upsertTags,
 } from "./lib/store.js";
 
 const app = express();
 app.set("trust proxy", 1);
+const mediaDir = path.resolve(DATA_DIR, "media");
+fs.mkdirSync(mediaDir, { recursive: true });
+
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 80 * 1024 * 1024 },
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, mediaDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "").toLowerCase() || ".jpg";
+      cb(null, `${crypto.randomUUID()}${ext}`);
+    },
+  }),
+  limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-const oauthStates = new Map();
 const sessions = new Map();
 
-app.use(express.json({
-  limit: "2mb",
-  verify: (req, _res, buf) => {
-    req.rawBody = buf;
-  },
-}));
+app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: false }));
-app.use((req, res, next) => {
+app.use((req, _res, next) => {
   const cookie = parseCookies(req.headers.cookie);
   req.sessionId = cookie.tagwatch || null;
   req.authed = !APP_PASSWORD || sessions.get(req.sessionId) === true;
   next();
 });
 
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
-
-app.get("/webhooks/instagram", (req, res) => {
-  const mode = String(req.query["hub.mode"] || "");
-  const token = String(req.query["hub.verify_token"] || "");
-  const challenge = String(req.query["hub.challenge"] || "");
-  if (mode === "subscribe" && token && token === WEBHOOK_VERIFY_TOKEN && challenge) {
-    return res.status(200).send(challenge);
-  }
-  res.status(403).send("Webhook verification failed.");
+app.get("/api/health", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "vexigtracker",
+    mode: "browser-ingest",
+    window: { start: WINDOW_START, end: WINDOW_END },
+    ingestConfigured: Boolean(INGEST_API_KEY),
+    time: new Date().toISOString(),
+  });
 });
 
-app.post("/webhooks/instagram", async (req, res) => {
-  res.status(200).send("EVENT_RECEIVED");
-  const fields = summarizeWebhookFields(req.body);
-  const signatureOk = verifyWebhookSignature(req);
-  if (!signatureOk) {
-    const error = "Signature mismatch. IG_APP_SECRET must be the Instagram app secret (Instagram → API setup), not the Facebook app secret.";
-    console.error(error);
-    recordWebhook({ ok: false, error, fields, summary: "POST received, signature failed" });
-    return;
+/** Public read APIs for display boards */
+app.get("/api/stats", (_req, res) => {
+  res.json({ ...publicStats(), sse_clients: clientCount() });
+});
+
+app.get("/api/entries", (req, res) => {
+  const eligible = req.query.eligible === "true" ? true : req.query.eligible === "false" ? false : undefined;
+  const in_window = req.query.in_window === "true" ? true : req.query.in_window === "false" ? false : undefined;
+  const limit = req.query.limit;
+  res.json({ entries: listEntries({ eligible, in_window, limit }) });
+});
+
+app.get("/api/entries/latest", (req, res) => {
+  const eligible = req.query.eligible === "true";
+  const limit = req.query.limit || 20;
+  res.json({ entries: listEntries({ eligible: eligible ? true : undefined, limit }) });
+});
+
+app.get("/api/stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+  res.write(`event: hello\ndata: ${JSON.stringify({ ok: true, stats: publicStats() })}\n\n`);
+  addClient(res);
+  const ping = setInterval(() => {
+    try {
+      res.write(": ping\n\n");
+    } catch {
+      clearInterval(ping);
+    }
+  }, 25000);
+  req.on("close", () => clearInterval(ping));
+});
+
+app.use("/media", express.static(mediaDir, { maxAge: "7d" }));
+
+function requireIngest(req, res, next) {
+  if (!INGEST_API_KEY) {
+    return res.status(503).json({ error: "INGEST_API_KEY not configured on server" });
   }
-  recordWebhook({ ok: true, fields, summary: fields.length ? fields.join(", ") : "instagram event" });
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ")
+    ? header.slice(7)
+    : String(req.headers["x-api-key"] || "");
+  if (token !== INGEST_API_KEY) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  next();
+}
+
+/**
+ * Browser / agent ingest webhook bundle.
+ * POST /api/ingest
+ * Authorization: Bearer $INGEST_API_KEY
+ * {
+ *   followers?: [{ username, display_name?, followedAt? }],
+ *   tags?: [{ username, permalink, tagged_at, media_url?, caption?, follows?, display_name? }],
+ *   snapshot?: { follower_count, notes? },
+ *   replace_followers?: boolean  // if true, still upsert (not wipe) — reserved
+ * }
+ */
+app.post("/api/ingest", requireIngest, (req, res) => {
   try {
-    await handleInstagramWebhook(req.body);
+    const body = req.body || {};
+    const out = {};
+    if (Array.isArray(body.followers) && body.followers.length) {
+      out.followers = upsertFollowers(body.followers, body.source || "browser");
+    }
+    if (Array.isArray(body.tags) && body.tags.length) {
+      out.tags = upsertTags(body.tags, body.source || "browser");
+    }
+    if (body.snapshot && body.snapshot.follower_count != null) {
+      out.snapshot = addSnapshot(body.snapshot);
+    }
+    const stats = publicStats();
+    broadcast("stats", stats);
+    if (out.tags?.added) broadcast("entry.created", { count: out.tags.added });
+    res.json({ ok: true, ...out, stats });
   } catch (err) {
-    console.error("Instagram webhook handler failed:", err.message);
-    recordWebhook({ ok: false, error: err.message, fields, summary: "handler failed" });
+    res.status(400).json({ error: err.message || "ingest_failed" });
   }
+});
+
+app.post("/api/ingest/followers", requireIngest, (req, res) => {
+  const list = Array.isArray(req.body) ? req.body : req.body?.followers || [];
+  const result = upsertFollowers(list, req.body?.source || "browser");
+  broadcast("stats", publicStats());
+  res.json({ ok: true, ...result, stats: publicStats() });
+});
+
+app.post("/api/ingest/tags", requireIngest, upload.single("media"), (req, res) => {
+  let tags = Array.isArray(req.body?.tags) ? req.body.tags : null;
+  if (!tags && req.body?.username && req.body?.permalink) {
+    tags = [req.body];
+  }
+  if (!tags) return res.status(400).json({ error: "tags array or username+permalink required" });
+  if (req.file) {
+    const base = APP_URL || `${req.protocol}://${req.get("host")}`;
+    const url = `${base.replace(/\/$/, "")}/media/${req.file.filename}`;
+    tags = tags.map((t, i) => (i === 0 ? { ...t, media_url: url } : t));
+  }
+  const result = upsertTags(tags, req.body?.source || "browser");
+  const entries = listEntries({ limit: 5 });
+  broadcast("stats", publicStats());
+  if (entries[0]) broadcast("entry.created", entries[0]);
+  res.json({ ok: true, ...result, latest: entries[0] || null, stats: publicStats() });
+});
+
+app.post("/api/ingest/snapshot", requireIngest, (req, res) => {
+  if (req.body?.follower_count == null) {
+    return res.status(400).json({ error: "follower_count required" });
+  }
+  const snap = addSnapshot(req.body);
+  broadcast("stats", publicStats());
+  res.status(201).json({ ok: true, snapshot: snap, stats: publicStats() });
 });
 
 app.post("/api/login", (req, res) => {
@@ -109,345 +196,30 @@ app.post("/api/login", (req, res) => {
   res.json({ ok: true });
 });
 
-app.use("/api", (req, res, next) => {
-  if (req.path === "/login") return next();
+app.get("/api/dashboard", (req, res) => {
   if (!req.authed) return res.status(401).json({ error: "Password required.", needsAuth: true });
-  next();
-});
-
-app.get("/api/status", (_req, res) => {
-  res.json({
-    ...publicStatus(),
-    oauthReady: oauthConfigured(),
-    passwordRequired: Boolean(APP_PASSWORD),
-  });
-});
-
-app.post("/api/settings", (req, res) => {
-  const sinceDate = String(req.body?.sinceDate || "").slice(0, 10);
-  const includeUnknownDates = Boolean(req.body?.includeUnknownDates);
-  if (sinceDate && !/^\d{4}-\d{2}-\d{2}$/.test(sinceDate)) {
-    return res.status(400).json({ error: "sinceDate must be YYYY-MM-DD." });
-  }
-  updateStore({
-    settings: {
-      ...(sinceDate ? { sinceDate } : {}),
-      includeUnknownDates,
-    },
-  });
-  res.json(publicStatus());
-});
-
-app.post("/api/demo", (_req, res) => {
-  loadDemo();
-  writeSecrets({ accessToken: null, graphHost: null });
-  res.json({ ok: true, status: publicStatus() });
-});
-
-app.post("/api/connect/token", async (req, res) => {
-  try {
-    const accessToken = String(req.body?.accessToken || "").trim();
-    if (!accessToken) return res.status(400).json({ error: "Paste an Instagram or Facebook access token." });
-    const result = await connectAndSync(accessToken, "ui");
-    res.json({ ok: true, ...result, status: publicStatus() });
-  } catch (err) {
-    sendError(res, err);
-  }
-});
-
-app.post("/api/disconnect", (_req, res) => {
-  writeSecrets({ accessToken: null, graphHost: null });
-  updateStore({ account: null, settings: { demoMode: true } });
-  res.json({ ok: true, status: publicStatus() });
-});
-
-app.get("/auth/instagram", (req, res) => {
-  if (!req.authed) return res.status(401).send("Password required.");
-  const url = authorizeUrl(issueState());
-  if (!url) return res.status(400).send("Set IG_APP_ID, IG_APP_SECRET, and IG_REDIRECT_URI (or APP_URL).");
-  res.redirect(url);
-});
-
-app.get("/auth/callback", async (req, res) => {
-  try {
-    const { code, state, error_description: desc } = req.query;
-    if (desc) return res.status(400).send(String(desc));
-    if (!code || !consumeState(String(state || ""))) {
-      return res.status(400).send("Invalid OAuth callback.");
-    }
-    const token = await exchangeCodeForToken(String(code));
-    await connectAndSync(token, "oauth");
-    res.redirect("/?connected=1");
-  } catch (err) {
-    res.status(400).send(err.message || "OAuth failed.");
-  }
-});
-
-app.post("/api/sync/tags", async (_req, res) => {
-  try {
-    const result = await syncTagsFromStore();
-    res.json({ ok: result.ok, tagCount: result.tagCount, message: result.message, status: publicStatus() });
-  } catch (err) {
-    sendError(res, err);
-  }
-});
-
-app.post("/api/followers/upload", upload.single("file"), (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "Choose an Instagram export zip, JSON, HTML, or CSV." });
-    const followers = parseFollowerUpload(req.file.buffer, req.file.originalname);
-    const summary = upsertFollowers(followers, "export");
-    res.json({ ok: true, imported: followers.length, ...summary, status: publicStatus() });
-  } catch (err) {
-    sendError(res, err);
-  }
-});
-
-app.post("/api/followers/manual", (req, res) => {
-  const username = String(req.body?.username || "").trim();
-  if (!username) return res.status(400).json({ error: "Username required." });
-  const followedAt = req.body?.followedAt ? new Date(req.body.followedAt).toISOString() : new Date().toISOString();
-  const summary = upsertFollowers(
-    [{ username, followedAt, href: `https://www.instagram.com/${username.replace(/^@/, "")}/` }],
-    "manual",
-  );
-  res.json({ ok: true, ...summary, status: publicStatus() });
-});
-
-app.post("/api/posts/url", async (req, res) => {
-  try {
-    const tag = await lookupPublicPost(req.body?.url);
-    upsertTag(tag);
-    res.json({ ok: true, tag, status: publicStatus() });
-  } catch (err) {
-    sendError(res, err);
-  }
-});
-
-app.get("/api/results", (req, res) => {
-  const results = buildResults({
-    sinceDate: req.query.since || undefined,
-    includeUnknownDates: req.query.unknown === "1" ? true : req.query.unknown === "0" ? false : undefined,
-    filter: req.query.filter || "all",
-    q: req.query.q || "",
-  });
-  res.json(results);
+  res.json(buildDashboard());
 });
 
 app.use(express.static("public"));
-
-app.use((err, _req, res, _next) => {
-  sendError(res, err);
+app.use((req, res, next) => {
+  if (req.method !== "GET" && req.method !== "HEAD") return next();
+  if (req.path.startsWith("/api/") || req.path.startsWith("/media/")) return next();
+  res.sendFile(path.resolve("public/index.html"));
 });
 
-function issueState() {
-  const state = crypto.randomBytes(16).toString("hex");
-  oauthStates.set(state, Date.now() + 10 * 60 * 1000);
-  return state;
-}
+app.listen(PORT, HOST, () => {
+  console.log(`vexigtracker v2 listening on ${HOST}:${PORT}`);
+  console.log(`ingest key configured: ${Boolean(INGEST_API_KEY)}`);
+  console.log(`window ${WINDOW_START} → ${WINDOW_END}`);
+});
 
-function consumeState(state) {
-  const exp = oauthStates.get(state);
-  oauthStates.delete(state);
-  return Boolean(exp && exp > Date.now());
-}
-
-function parseCookies(header = "") {
+function parseCookies(header) {
   const out = {};
-  for (const part of String(header).split(";")) {
-    const [k, ...rest] = part.trim().split("=");
-    if (k) out[k] = rest.join("=");
+  for (const part of String(header || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i < 0) continue;
+    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
   }
   return out;
 }
-
-async function connectAndSync(accessToken, source = "ui") {
-  const connected = await detectAndConnect(accessToken);
-  writeSecrets({
-    accessToken: connected.accessToken,
-    graphHost: connected.graphHost,
-    source,
-    fingerprint: crypto.createHash("sha256").update(accessToken).digest("hex").slice(0, 16),
-  });
-  updateStore({ account: connected.account, settings: { demoMode: false }, lastConnectError: null });
-  try {
-    const subs = await subscribeAccountWebhooks({
-      graphHost: connected.graphHost,
-      accessToken: connected.accessToken,
-    });
-    console.log("Webhook field subscribe:", subs.map((s) => `${s.field}=${s.ok ? "ok" : s.detail}`).join(", "));
-  } catch (err) {
-    console.error("Webhook subscribe failed:", err.message);
-  }
-  let sync;
-  try {
-    sync = await syncTagsFromStore();
-  } catch (err) {
-    sync = { ok: false, tagCount: 0, message: formatIgError(err) };
-  }
-  return {
-    username: connected.account.username,
-    instagramFollowersCount: connected.account.followersCount,
-    tagSync: sync,
-  };
-}
-
-async function syncTagsFromStore() {
-  const secrets = readSecrets();
-  const store = readStore();
-  if (!secrets.accessToken || !store.account?.id || store.settings.demoMode) {
-    throw new InstagramApiError("Connect an Instagram professional account first.", 400);
-  }
-  const altIds = [store.account.appScopedId].filter(Boolean);
-  try {
-    const diag = await runDiagnostics({
-      graphHost: secrets.graphHost,
-      accessToken: secrets.accessToken,
-      userId: store.account.id,
-      altIds,
-    });
-    const tagTest = diag.tests.find((t) => t.name.startsWith("Photo-tags"));
-    const ok = Boolean(tagTest?.ok);
-    recordTagSync({
-      ok,
-      tags: ok ? diag.tags : undefined,
-      error: ok ? null : tagTest?.detail || "Tagged-post sync failed.",
-      diagnose: diag.tests,
-    });
-    return {
-      ok,
-      tagCount: ok ? diag.tags.length : store.tags.length,
-      message: tagTest?.detail,
-      tests: diag.tests,
-    };
-  } catch (err) {
-    const message = formatIgError(err);
-    recordTagSync({ ok: false, error: message });
-    throw err;
-  }
-}
-
-function verifyWebhookSignature(req) {
-  const header = String(req.headers["x-hub-signature-256"] || "");
-  if (!header) return false;
-  const raw = req.rawBody || Buffer.from("");
-  const secrets = [IG_APP_SECRET, META_APP_SECRET].filter(Boolean);
-  if (!secrets.length) return true;
-  return secrets.some((secret) => {
-    const expected = "sha256=" + crypto.createHmac("sha256", secret).update(raw).digest("hex");
-    try {
-      return crypto.timingSafeEqual(Buffer.from(header), Buffer.from(expected));
-    } catch {
-      return false;
-    }
-  });
-}
-
-function summarizeWebhookFields(body) {
-  const fields = [];
-  for (const entry of body?.entry || []) {
-    for (const change of entry.changes || []) {
-      if (change.field) fields.push(change.field);
-    }
-    if (entry.messaging) fields.push("messages");
-  }
-  return [...new Set(fields)];
-}
-
-async function handleInstagramWebhook(body) {
-  if (body?.object !== "instagram") return;
-  const secrets = readSecrets();
-  const store = readStore();
-  if (!secrets.accessToken || !store.account?.id) return;
-  const ourName = String(store.account.username || "").toLowerCase();
-  for (const entry of body.entry || []) {
-    for (const change of entry.changes || []) {
-      if (!["mentions", "comments", "live_comments"].includes(change.field)) continue;
-      const value = change.value || {};
-      const mediaId = value.media_id || value.media?.id;
-      if (!mediaId) continue;
-      const fromUsername = value.from?.username || "";
-      const text = String(value.text || value.caption || "");
-      let tag = null;
-      try {
-        tag = await fetchMentionedMedia({
-          graphHost: secrets.graphHost,
-          accessToken: secrets.accessToken,
-          userId: store.account.id,
-          mediaId,
-        });
-      } catch {
-        tag = null;
-      }
-      if (!tag) {
-        try {
-          const media = await fetchMediaPreview({
-            graphHost: secrets.graphHost,
-            accessToken: secrets.accessToken,
-            mediaId,
-          });
-          const owner = String(media.username || "").toLowerCase();
-          if (owner && owner === ourName) continue;
-          const mentioned = ourName && text.toLowerCase().includes(`@${ourName}`);
-          if (!mentioned && change.field !== "mentions") continue;
-          tag = {
-            id: String(media.id),
-            username: (fromUsername || media.username || "").replace(/^@/, "").toLowerCase(),
-            caption: media.caption || text,
-            mediaType: media.media_type || "UNKNOWN",
-            permalink: media.permalink || null,
-            timestamp: media.timestamp || null,
-            source: "mention",
-          };
-        } catch {
-          continue;
-        }
-      }
-      if (fromUsername && tag && !tag.username) {
-        tag.username = fromUsername.replace(/^@/, "").toLowerCase();
-      }
-      if (tag) upsertTag(tag);
-    }
-  }
-}
-
-function sendError(res, err) {
-  const payload = {
-    error: err instanceof InstagramApiError ? formatIgError(err) : err.message || "Request failed.",
-    code: err.code,
-  };
-  const status = err instanceof InstagramApiError ? 400 : 400;
-  res.status(status).json(payload);
-}
-
-if (!isProd && !readStore().followers.length && !readStore().tags.length) {
-  loadDemo();
-}
-
-async function applyEnvToken() {
-  if (!IG_ACCESS_TOKEN) return;
-  console.log("Applying IG_ACCESS_TOKEN from environment");
-  try {
-    const result = await connectAndSync(IG_ACCESS_TOKEN, "env");
-    const tagBit = result.tagSync?.ok
-      ? `${result.tagSync.tagCount} tagged posts`
-      : result.tagSync?.message || "tagged-post sync failed";
-    console.log(`Connected @${result.username} from env (${tagBit})`);
-  } catch (err) {
-    const message = formatIgError(err);
-    console.error("IG_ACCESS_TOKEN failed:", message);
-    updateStore({ lastConnectError: message });
-  }
-}
-
-setInterval(() => {
-  const secrets = readSecrets();
-  const store = readStore();
-  if (!secrets.accessToken || store.settings.demoMode) return;
-  syncTagsFromStore().catch((err) => console.error("Scheduled tag sync failed:", err.message));
-}, 5 * 60 * 1000);
-
-app.listen(PORT, HOST, () => {
-  console.log(`vexigtracker listening on http://${HOST}:${PORT}`);
-  applyEnvToken();
-});

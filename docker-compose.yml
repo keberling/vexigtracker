@@ -1,24 +1,18 @@
 services:
-  vexigtracker:
+  igtracker:
     build: .
     ports:
-      - "${PORT:-3000}:3000"
+      - "3000:3000"
     environment:
-      NODE_ENV: production
-      PORT: 3000
-      HOST: 0.0.0.0
+      APP_PASSWORD: ${APP_PASSWORD:-changeme}
+      INGEST_API_KEY: ${INGEST_API_KEY:-dev-ingest-key}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      GIVEAWAY_WINDOW_START: "2026-09-13"
+      GIVEAWAY_WINDOW_END: "2026-09-15"
+      TZ: America/Chicago
       DATA_DIR: /data
-      APP_URL: ${APP_URL:-}
-      APP_PASSWORD: ${APP_PASSWORD:-}
-      IG_APP_ID: ${IG_APP_ID:-}
-      IG_APP_SECRET: ${IG_APP_SECRET:-}
-      IG_REDIRECT_URI: ${IG_REDIRECT_URI:-}
-      IG_API_VERSION: ${IG_API_VERSION:-v21.0}
-      IG_ACCESS_TOKEN: ${IG_ACCESS_TOKEN:-}
-      WEBHOOK_VERIFY_TOKEN: ${WEBHOOK_VERIFY_TOKEN:-}
     volumes:
-      - vexigtracker-data:/data
+      - igtracker-data:/data
     restart: unless-stopped
-
 volumes:
-  vexigtracker-data:
+  igtracker-data:

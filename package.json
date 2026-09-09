@@ -1,18 +1,17 @@
 {
   "name": "vexigtracker",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Internal Instagram tracker for new followers and posts that tag your account",
+  "description": "VEXitEY Instagram giveaway tracker — browser ingest + live display API",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
-    "adm-zip": "^0.5.16",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
     "multer": "^2.0.2"

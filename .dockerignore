@@ -1,8 +1,5 @@
 node_modules
 data
-.env
 .git
-*.log
-.DS_Store
-README.md
-sample_followers.json
+.env
+*.md
