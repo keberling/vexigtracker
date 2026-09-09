@@ -41,6 +41,7 @@ See the Coolify env/storage list in this repo’s deploy notes after push, or th
 | `APP_URL` | Yes if using Instagram OAuth | `https://igtracker.apps.vexitey.com` | No trailing slash |
 | `IG_APP_ID` | Yes for live Instagram | from Meta app dashboard | |
 | `IG_APP_SECRET` | Yes for live Instagram | from Meta app dashboard | Treat as secret |
+| `IG_ACCESS_TOKEN` | **Yes** (recommended) | token from Meta → Generate token | Auto-connects on every start. You do not paste in the UI. |
 | `IG_REDIRECT_URI` | If not using `APP_URL` | `https://igtracker.apps.vexitey.com/auth/callback` | Must match Meta exactly |
 | `HOST` | No | `0.0.0.0` | Already set in the image |
 | `PORT` | No | `3000` | Already set in the image |
@@ -60,6 +61,6 @@ Without this volume, a redeploy wipes the connected account and imported followe
 
 1. Instagram app → **Set up Instagram business login** → Valid OAuth redirect URI: `https://<your-domain>/auth/callback`
 2. Add `vexitey` as Instagram Tester if the app is in Development mode
-3. Generate a token and paste it in the dashboard, or use **Connect with Instagram**
+3. Generate a token and set it as `IG_ACCESS_TOKEN` in Coolify (preferred), or paste it in the dashboard
 
 Healthcheck path: `/api/health`

@@ -51,6 +51,11 @@ function renderStatus(status) {
   $("since-date").value = status.settings.sinceDate;
   $("unknown-dates").checked = Boolean(status.settings.includeUnknownDates);
   $("oauth-link").classList.toggle("hidden", !status.oauthReady);
+  if ($("token-hint")) {
+    $("token-hint").textContent = status.envTokenConfigured
+      ? "IG_ACCESS_TOKEN is set in the environment and is applied on startup. A pasted token is used until the next restart, then env wins."
+      : "Prefer IG_ACCESS_TOKEN in Coolify so it survives deploys. Pasting here is a one-off unless you also set env.";
+  }
   const bits = [];
   if (status.lastFollowerImportAt) bits.push(`Export imported ${fmtDate(status.lastFollowerImportAt)}`);
   if (status.lastTagSyncAt) bits.push(`Tags ${status.lastTagSyncOk === false ? "failed" : "synced"} ${fmtDate(status.lastTagSyncAt)}`);

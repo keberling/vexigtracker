@@ -2,7 +2,7 @@ import "dotenv/config";
 import crypto from "node:crypto";
 import express from "express";
 import multer from "multer";
-import { APP_PASSWORD, HOST, PORT, isProd, oauthConfigured } from "./lib/config.js";
+import { APP_PASSWORD, HOST, IG_ACCESS_TOKEN, PORT, isProd, oauthConfigured } from "./lib/config.js";
 import { loadDemo } from "./lib/demo.js";
 import { authorizeUrl, detectAndConnect, exchangeCodeForToken, formatIgError, InstagramApiError, runDiagnostics } from "./lib/instagram.js";
 import { parseFollowerUpload } from "./lib/parseExport.js";
@@ -91,7 +91,7 @@ app.post("/api/connect/token", async (req, res) => {
   try {
     const accessToken = String(req.body?.accessToken || "").trim();
     if (!accessToken) return res.status(400).json({ error: "Paste an Instagram or Facebook access token." });
-    const result = await connectAndSync(accessToken);
+    const result = await connectAndSync(accessToken, "ui");
     res.json({ ok: true, ...result, status: publicStatus() });
   } catch (err) {
     sendError(res, err);
@@ -119,7 +119,7 @@ app.get("/auth/callback", async (req, res) => {
       return res.status(400).send("Invalid OAuth callback.");
     }
     const token = await exchangeCodeForToken(String(code));
-    await connectAndSync(token);
+    await connectAndSync(token, "oauth");
     res.redirect("/?connected=1");
   } catch (err) {
     res.status(400).send(err.message || "OAuth failed.");
@@ -194,10 +194,15 @@ function parseCookies(header = "") {
   return out;
 }
 
-async function connectAndSync(accessToken) {
+async function connectAndSync(accessToken, source = "ui") {
   const connected = await detectAndConnect(accessToken);
-  writeSecrets({ accessToken: connected.accessToken, graphHost: connected.graphHost });
-  updateStore({ account: connected.account, settings: { demoMode: false } });
+  writeSecrets({
+    accessToken: connected.accessToken,
+    graphHost: connected.graphHost,
+    source,
+    fingerprint: crypto.createHash("sha256").update(accessToken).digest("hex").slice(0, 16),
+  });
+  updateStore({ account: connected.account, settings: { demoMode: false }, lastConnectError: null });
   let sync;
   try {
     sync = await syncTagsFromStore();
@@ -259,6 +264,23 @@ if (!isProd && !readStore().followers.length && !readStore().tags.length) {
   loadDemo();
 }
 
+async function applyEnvToken() {
+  if (!IG_ACCESS_TOKEN) return;
+  console.log("Applying IG_ACCESS_TOKEN from environment");
+  try {
+    const result = await connectAndSync(IG_ACCESS_TOKEN, "env");
+    const tagBit = result.tagSync?.ok
+      ? `${result.tagSync.tagCount} tagged posts`
+      : result.tagSync?.message || "tagged-post sync failed";
+    console.log(`Connected @${result.username} from env (${tagBit})`);
+  } catch (err) {
+    const message = formatIgError(err);
+    console.error("IG_ACCESS_TOKEN failed:", message);
+    updateStore({ lastConnectError: message });
+  }
+}
+
 app.listen(PORT, HOST, () => {
   console.log(`vexigtracker listening on http://${HOST}:${PORT}`);
+  applyEnvToken();
 });
