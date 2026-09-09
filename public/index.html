@@ -3,44 +3,78 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>VEXitEY Tagwatch</title>
+  <title>Tagwatch · VEXitEY</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div id="login" class="login hidden">
-    <form id="loginForm">
+  <div id="login" class="login-screen hidden">
+    <div class="login-card">
+      <div class="brand-mark">V</div>
       <h1>Tagwatch</h1>
-      <p>Dashboard password</p>
-      <input type="password" id="password" autocomplete="current-password" required />
-      <button type="submit">Open</button>
-      <p id="loginErr" class="err"></p>
-    </form>
+      <p class="login-sub">VEXitEY Instagram giveaway tracker</p>
+      <form id="loginForm">
+        <label class="field">
+          <span>Dashboard password</span>
+          <input type="password" id="password" autocomplete="current-password" required placeholder="••••••••" />
+        </label>
+        <button type="submit" class="btn primary">Open dashboard</button>
+        <p id="loginErr" class="err"></p>
+      </form>
+    </div>
   </div>
 
-  <main id="app" class="hidden">
-    <header>
-      <div>
-        <h1>Tagwatch</h1>
-        <p class="sub">@vexitey · browser ingest · Sept 13–15 drawing window</p>
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark sm">V</div>
+        <div>
+          <h1>Tagwatch</h1>
+          <p class="sub">@vexitey · follow + tag · Sept 13–15</p>
+        </div>
       </div>
-      <div id="stats" class="stats"></div>
+      <div id="stats" class="stat-pills"></div>
     </header>
 
-    <section>
-      <h2>Eligible entries</h2>
-      <div id="eligible" class="grid"></div>
-    </section>
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab active" data-tab="eligible">Eligible</button>
+      <button type="button" class="tab" data-tab="tags">All tags</button>
+      <button type="button" class="tab" data-tab="followers">Followers</button>
+    </nav>
 
-    <section>
-      <h2>Recent tags</h2>
-      <div id="tags" class="grid"></div>
-    </section>
+    <main>
+      <section id="panel-eligible" class="panel">
+        <div class="panel-head">
+          <h2>Eligible for drawing</h2>
+          <p class="hint">Follow + photo-tag inside Sept 13–15 (Chicago)</p>
+        </div>
+        <div id="eligible" class="grid"></div>
+      </section>
 
-    <section>
-      <h2>Followers on file</h2>
-      <div id="followers" class="table"></div>
-    </section>
-  </main>
+      <section id="panel-tags" class="panel hidden">
+        <div class="panel-head">
+          <h2>Recent tags</h2>
+          <p class="hint">All ingested photo-tags, newest first</p>
+        </div>
+        <div id="tags" class="grid"></div>
+      </section>
+
+      <section id="panel-followers" class="panel hidden">
+        <div class="panel-head">
+          <h2>Followers on file</h2>
+          <p class="hint">From browser ingest (Meta API can’t list names)</p>
+        </div>
+        <div id="followers" class="table-wrap"></div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span id="ingestMeta"></span>
+      <a href="/api/stats" target="_blank" rel="noopener">API stats</a>
+    </footer>
+  </div>
   <script src="/app.js"></script>
 </body>
 </html>
