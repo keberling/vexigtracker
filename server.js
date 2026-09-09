@@ -16,10 +16,12 @@ import { loadDemo } from "./lib/demo.js";
 import {
   detectAndConnect,
   exchangeCodeForToken,
+  fetchMediaPreview,
   fetchMentionedMedia,
   formatIgError,
   InstagramApiError,
   runDiagnostics,
+  subscribeAccountWebhooks,
   authorizeUrl,
 } from "./lib/instagram.js";
 import { parseFollowerUpload } from "./lib/parseExport.js";
@@ -249,6 +251,15 @@ async function connectAndSync(accessToken, source = "ui") {
     fingerprint: crypto.createHash("sha256").update(accessToken).digest("hex").slice(0, 16),
   });
   updateStore({ account: connected.account, settings: { demoMode: false }, lastConnectError: null });
+  try {
+    const subs = await subscribeAccountWebhooks({
+      graphHost: connected.graphHost,
+      accessToken: connected.accessToken,
+    });
+    console.log("Webhook field subscribe:", subs.map((s) => `${s.field}=${s.ok ? "ok" : s.detail}`).join(", "));
+  } catch (err) {
+    console.error("Webhook subscribe failed:", err.message);
+  }
   let sync;
   try {
     sync = await syncTagsFromStore();
@@ -313,17 +324,53 @@ async function handleInstagramWebhook(body) {
   const secrets = readSecrets();
   const store = readStore();
   if (!secrets.accessToken || !store.account?.id) return;
+  const ourName = String(store.account.username || "").toLowerCase();
   for (const entry of body.entry || []) {
     for (const change of entry.changes || []) {
-      if (change.field !== "mentions") continue;
-      const mediaId = change.value?.media_id;
+      if (!["mentions", "comments", "live_comments"].includes(change.field)) continue;
+      const value = change.value || {};
+      const mediaId = value.media_id || value.media?.id;
       if (!mediaId) continue;
-      const tag = await fetchMentionedMedia({
-        graphHost: secrets.graphHost,
-        accessToken: secrets.accessToken,
-        userId: store.account.id,
-        mediaId,
-      });
+      const fromUsername = value.from?.username || "";
+      const text = String(value.text || value.caption || "");
+      let tag = null;
+      try {
+        tag = await fetchMentionedMedia({
+          graphHost: secrets.graphHost,
+          accessToken: secrets.accessToken,
+          userId: store.account.id,
+          mediaId,
+        });
+      } catch {
+        tag = null;
+      }
+      if (!tag) {
+        try {
+          const media = await fetchMediaPreview({
+            graphHost: secrets.graphHost,
+            accessToken: secrets.accessToken,
+            mediaId,
+          });
+          const owner = String(media.username || "").toLowerCase();
+          if (owner && owner === ourName) continue;
+          const mentioned = ourName && text.toLowerCase().includes(`@${ourName}`);
+          if (!mentioned && change.field !== "mentions") continue;
+          tag = {
+            id: String(media.id),
+            username: (fromUsername || media.username || "").replace(/^@/, "").toLowerCase(),
+            caption: media.caption || text,
+            mediaType: media.media_type || "UNKNOWN",
+            permalink: media.permalink || null,
+            timestamp: media.timestamp || null,
+            source: "mention",
+          };
+        } catch {
+          continue;
+        }
+      }
+      if (fromUsername && tag && !tag.username) {
+        tag.username = fromUsername.replace(/^@/, "").toLowerCase();
+      }
       if (tag) upsertTag(tag);
     }
   }

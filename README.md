@@ -68,11 +68,12 @@ Healthcheck path: `/api/health`
 
 ### Caption @mentions (optional webhook)
 
-`GET /tags` does **not** include posts that only @mention you in the caption. To catch those going forward:
+Instagram Login apps **do not show a `mentions` toggle** in the dashboard. Meta folds those events into **`comments`**.
 
 1. Coolify env: `WEBHOOK_VERIFY_TOKEN` (any secret string)
 2. Meta → Instagram → Configure webhooks
    - Callback URL: `https://<your-domain>/webhooks/instagram`
    - Verify token: same as `WEBHOOK_VERIFY_TOKEN`
-   - Subscribe to **mentions**
-3. Redeploy. New caption @mentions will show as post links. Historical caption mentions cannot be backfilled.
+   - Subscribe to **comments** (already enough). Messaging fields are optional.
+3. Redeploy so the app can `POST /me/subscribed_apps` with your token (dashboard toggles alone are not enough).
+4. New @mentions in comments/captions can then show as post links. Historical mentions cannot be backfilled.
