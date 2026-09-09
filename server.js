@@ -7,6 +7,7 @@ import {
   HOST,
   IG_ACCESS_TOKEN,
   IG_APP_SECRET,
+  META_APP_SECRET,
   PORT,
   WEBHOOK_VERIFY_TOKEN,
   isProd,
@@ -18,6 +19,7 @@ import {
   exchangeCodeForToken,
   fetchMediaPreview,
   fetchMentionedMedia,
+  lookupPublicPost,
   formatIgError,
   InstagramApiError,
   runDiagnostics,
@@ -31,6 +33,7 @@ import {
   readSecrets,
   readStore,
   recordTagSync,
+  recordWebhook,
   updateStore,
   upsertFollowers,
   upsertTag,
@@ -75,14 +78,20 @@ app.get("/webhooks/instagram", (req, res) => {
 
 app.post("/webhooks/instagram", async (req, res) => {
   res.status(200).send("EVENT_RECEIVED");
+  const fields = summarizeWebhookFields(req.body);
+  const signatureOk = verifyWebhookSignature(req);
+  if (!signatureOk) {
+    const error = "Signature mismatch. IG_APP_SECRET must be the Instagram app secret (Instagram → API setup), not the Facebook app secret.";
+    console.error(error);
+    recordWebhook({ ok: false, error, fields, summary: "POST received, signature failed" });
+    return;
+  }
+  recordWebhook({ ok: true, fields, summary: fields.length ? fields.join(", ") : "instagram event" });
   try {
-    if (!verifyWebhookSignature(req)) {
-      console.error("Instagram webhook signature mismatch");
-      return;
-    }
     await handleInstagramWebhook(req.body);
   } catch (err) {
     console.error("Instagram webhook handler failed:", err.message);
+    recordWebhook({ ok: false, error: err.message, fields, summary: "handler failed" });
   }
 });
 
@@ -205,6 +214,16 @@ app.post("/api/followers/manual", (req, res) => {
   res.json({ ok: true, ...summary, status: publicStatus() });
 });
 
+app.post("/api/posts/url", async (req, res) => {
+  try {
+    const tag = await lookupPublicPost(req.body?.url);
+    upsertTag(tag);
+    res.json({ ok: true, tag, status: publicStatus() });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 app.get("/api/results", (req, res) => {
   const results = buildResults({
     sinceDate: req.query.since || undefined,
@@ -309,14 +328,30 @@ async function syncTagsFromStore() {
 }
 
 function verifyWebhookSignature(req) {
-  if (!IG_APP_SECRET) return true;
   const header = String(req.headers["x-hub-signature-256"] || "");
-  const expected = "sha256=" + crypto.createHmac("sha256", IG_APP_SECRET).update(req.rawBody || Buffer.from("")).digest("hex");
-  try {
-    return crypto.timingSafeEqual(Buffer.from(header), Buffer.from(expected));
-  } catch {
-    return false;
+  if (!header) return false;
+  const raw = req.rawBody || Buffer.from("");
+  const secrets = [IG_APP_SECRET, META_APP_SECRET].filter(Boolean);
+  if (!secrets.length) return true;
+  return secrets.some((secret) => {
+    const expected = "sha256=" + crypto.createHmac("sha256", secret).update(raw).digest("hex");
+    try {
+      return crypto.timingSafeEqual(Buffer.from(header), Buffer.from(expected));
+    } catch {
+      return false;
+    }
+  });
+}
+
+function summarizeWebhookFields(body) {
+  const fields = [];
+  for (const entry of body?.entry || []) {
+    for (const change of entry.changes || []) {
+      if (change.field) fields.push(change.field);
+    }
+    if (entry.messaging) fields.push("messages");
   }
+  return [...new Set(fields)];
 }
 
 async function handleInstagramWebhook(body) {
@@ -404,6 +439,13 @@ async function applyEnvToken() {
     updateStore({ lastConnectError: message });
   }
 }
+
+setInterval(() => {
+  const secrets = readSecrets();
+  const store = readStore();
+  if (!secrets.accessToken || store.settings.demoMode) return;
+  syncTagsFromStore().catch((err) => console.error("Scheduled tag sync failed:", err.message));
+}, 5 * 60 * 1000);
 
 app.listen(PORT, HOST, () => {
   console.log(`vexigtracker listening on http://${HOST}:${PORT}`);

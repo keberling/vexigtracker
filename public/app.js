@@ -267,6 +267,20 @@ $("disconnect").addEventListener("click", async () => {
   flash("Disconnected.");
 });
 
+$("add-post").addEventListener("click", async () => {
+  try {
+    const data = await api("/api/posts/url", {
+      method: "POST",
+      body: JSON.stringify({ url: $("post-url").value }),
+    });
+    $("post-url").value = "";
+    await refresh();
+    flash(`Added post from @${data.tag?.username || "unknown"}.`);
+  } catch (err) {
+    flash(err.message, true);
+  }
+});
+
 $("add-follower").addEventListener("click", async () => {
   try {
     await api("/api/followers/manual", {
